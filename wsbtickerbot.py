@@ -6,12 +6,24 @@ import json
 import pprint
 import operator
 import datetime
+from functools import cache
 from praw.models import MoreComments
-from iexfinance import Stock as IEXStock
+from urllib.request import Request, urlopen
+from pandas_datareader import data as pdr
+from datetime import date
+import yfinance as yf
+yf.pdr_override()
+import pandas as pd
+
 
 # to add the path for Python to search for files to use my edited version of vaderSentiment
 sys.path.insert(0, 'vaderSentiment/vaderSentiment')
 from vaderSentiment import SentimentIntensityAnalyzer
+
+@cache
+def ticker_data(ticker):
+    #print("Downloading data for ticker %s\n" %(ticker))
+    return pdr.get_data_yahoo(ticker)
 
 def extract_ticker(body, start_index):
    """
@@ -58,29 +70,40 @@ def parse_section(ticker_dict, body):
          try:
             # special case for $ROPE
             if word != "ROPE":
-               price = IEXStock(word).get_price()
-               if word in ticker_dict:
-                  ticker_dict[word].count += 1
-                  ticker_dict[word].bodies.append(body)
-               else:
-                  ticker_dict[word] = Ticker(word)
-                  ticker_dict[word].count = 1
-                  ticker_dict[word].bodies.append(body)
+               data = ticker_data(word)
+               if len(data.Close) > 0:
+                  price = data.Close[-1]
+                  if word in ticker_dict:
+                     ticker_dict[word].count += 1
+                     ticker_dict[word].bodies.append(body)
+                  else:
+                     ticker_dict[word] = Ticker(word)
+                     ticker_dict[word].count = 1
+                     ticker_dict[word].bodies.append(body)
          except:
             pass
    
    # checks for non-$ formatted comments, splits every body into list of words
    word_list = re.sub("[^\w]", " ",  body).split()
    for count, word in enumerate(word_list):
-      # initial screening of words
-      if word.isupper() and len(word) != 1 and (word.upper() not in blacklist_words) and len(word) <= 5 and word.isalpha():
+      #print("found word: %s\n" % (word))
+      # initial screening of words to check if they are a ticker
+      # and len(word) != 1 # skip 1 letter words
+      if word.isupper() and (word.upper() not in blacklist_words) and len(word) <= 5 and word.isalpha():
          # sends request to IEX API to determine whether the current word is a valid ticker
          # if it isn't, it'll return an error and therefore continue on to the next word
          try:
             # special case for $ROPE
             if word != "ROPE":
-               price = IEXStock(word).get_price()
-         except:
+               #print("is ticker = %s?\n" % (word))
+               #print("stock info = %s\n" % (get_name(word)))
+               #price = IEXStock(word).get_price()
+               data = ticker_data(word)
+               price = data.Close[-1]
+               #pprint.pprint(vars(data.Close))
+               #print("price for %s is %s" % (word, price))
+         except Exception as e:
+            #print(e)
             continue
       
          # add/adjust value of dictionary
@@ -103,9 +126,10 @@ def get_url(key, value, total_count):
          perc_mentions = int(value / total_count * 100)
    # special case for $ROPE
    if key == "ROPE":
-      return "${0} | [{1} {2} ({3}% of all mentions)](https://www.homedepot.com/b/Hardware-Chains-Ropes-Rope/N-5yc1vZc2gr)".format(key, value, mention, perc_mentions)
+      return "{0} | [{1} {2} ({3}%)](https://www.homedepot.com/b/Hardware-Chains-Ropes-Rope/N-5yc1vZc2gr)".format(key, value, mention, perc_mentions)
    else:
-      return "${0} | [{1} {2} ({3}% of all mentions)](https://finance.yahoo.com/quote/{0}?p={0})".format(key, value, mention, perc_mentions)
+      #return "{0} | [{1} {2} ({3}%)](https://finance.yahoo.com/quote/{0}?p={0})".format(key, value, mention, perc_mentions)
+      return "{0} | [{1} {2} ({3}%)](https://marketchameleon.com/Overview/{0}/OptionChain/?ac=volume)".format(key, value, mention, perc_mentions)
 
 def final_post(subreddit, text):
    # finding the daily discussino thread to post
@@ -145,13 +169,15 @@ def run(mode, sub, num_submissions):
    new_posts = subreddit.new(limit=num_submissions)
 
    for count, post in enumerate(new_posts):
+      #print("posts: count=%s, post.title=%s\n" % (count, post.title))
+      # pprint.pprint(vars(post))
       # if we have not already viewed this post thread
       if not post.clicked:
          # parse the post's title's text
          ticker_dict = parse_section(ticker_dict, post.title)
 
          # to determine whether it has gone through all posts in the past 24 hours
-         if "Daily Discussion Thread - " in post.title:
+         if "Daily Discussion Thread " in post.title:
             if not within24_hrs:
                within24_hrs = True
             else:
@@ -175,12 +201,13 @@ def run(mode, sub, num_submissions):
                ticker_dict = parse_section(ticker_dict, rep.body)
          
          # update the progress count
-         sys.stdout.write("\rProgress: {0} / {1} posts".format(count + 1, num_submissions))
+         # print("{0} / {1} {2}".format(count + 1, num_submissions, post.title))
+         sys.stdout.write("\rProgress: {0} / {1} posts: {2}".format(count + 1, num_submissions, post.title))
          sys.stdout.flush()
 
-   text = "To help you YOLO your money away, here are all of the tickers mentioned at least 10 times in all the posts within the past 24 hours (and links to their Yahoo Finance page) along with a sentiment analysis percentage:"
-   text += "\n\nTicker | Mentions | Bullish (%) | Neutral (%) | Bearish (%)\n:- | :- | :- | :- | :-"
+   text += "\n\nTicker | Mentions | Bullish (%) | Neutral (%) | Bearish (%)\n"
 
+   print("Tickers found: %s" % (ticker_dict.keys()))
    total_mentions = 0
    ticker_list = []
    for key in ticker_dict:
@@ -201,8 +228,6 @@ def run(mode, sub, num_submissions):
       url = get_url(ticker.ticker, ticker.count, total_mentions)
       # setting up formatting for table
       text += "\n{} | {} | {} | {}".format(url, ticker.bullish, ticker.bearish, ticker.neutral)
-
-   text += "\n\nTake a look at my [source code](https://github.com/RyanElliott10/wsbtickerbot) and make some contributions if you're interested."
 
    # post to the subreddit if it is in bot mode (i.e. not testing)
    if not mode:
