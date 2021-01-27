@@ -23,7 +23,10 @@ from vaderSentiment import SentimentIntensityAnalyzer
 @cache
 def ticker_data(ticker):
     #print("Downloading data for ticker %s\n" %(ticker))
-    return pdr.get_data_yahoo(ticker)
+    lastBusDay = datetime.datetime.today()
+    shift = datetime.timedelta(max(1,(lastBusDay.weekday() + 6) % 7 - 3))
+    lastBusDay = lastBusDay - shift
+    return pdr.get_data_yahoo(ticker, lastBusDay.strftime('%Y-%m-%d'))
 
 def extract_ticker(body, start_index):
    """
@@ -80,7 +83,8 @@ def parse_section(ticker_dict, body):
                      ticker_dict[word] = Ticker(word)
                      ticker_dict[word].count = 1
                      ticker_dict[word].bodies.append(body)
-         except:
+         except Exception as e:
+            print(e)
             pass
    
    # checks for non-$ formatted comments, splits every body into list of words
