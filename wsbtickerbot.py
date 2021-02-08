@@ -1,25 +1,27 @@
+#!/usr/bin/env python
+
+import datetime
+import json
+import operator
+import pandas as pd
+import pprint
+import praw
 import re
 import sys
-import praw
 import time
-import json
-import pprint
-import operator
-import datetime
+import yfinance as yf
+
+from cache_to_disk import cache_to_disk
+from datetime import date
 from functools import cache
+from pandas_datareader import data as pdr
 from praw.models import MoreComments
 from urllib.request import Request, urlopen
-from pandas_datareader import data as pdr
-from datetime import date
-import yfinance as yf
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
 yf.pdr_override()
-import pandas as pd
 
-# to add the path for Python to search for files to use my edited version of vaderSentiment
-sys.path.insert(0, 'vaderSentiment/vaderSentiment')
-from vaderSentiment import SentimentIntensityAnalyzer
-
-@cache
+@cache_to_disk(90)
 def ticker_data(ticker):
     #print("Downloading data for ticker %s\n" %(ticker))
     lastBusDay = datetime.datetime.today()
@@ -61,7 +63,7 @@ def find_tickers(ticker_dict, text):
       "OP", "DJIA", "PS", "AH", "TL", "DR", "JAN", "FEB", "JUL", "AUG",
       "SEP", "SEPT", "OCT", "NOV", "DEC", "FDA", "IV", "ER", "IPO", "RISE"
       "IPA", "URL", "MILF", "BUT", "SSN", "FIFA", "USD", "CPU", "AT",
-      "GG", "ELON"
+      "GG", "ELON", "HOLD", "A", "E", "EV", "AM", "U", "AND", "D", "MOON"
    ]
 
    def check_and_add_ticker(ticker):
