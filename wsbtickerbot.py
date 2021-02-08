@@ -15,7 +15,6 @@ import yfinance as yf
 yf.pdr_override()
 import pandas as pd
 
-
 # to add the path for Python to search for files to use my edited version of vaderSentiment
 sys.path.insert(0, 'vaderSentiment/vaderSentiment')
 from vaderSentiment import SentimentIntensityAnalyzer
@@ -49,8 +48,8 @@ def extract_ticker(body, start_index):
 
    return ticker.upper()
 
-def parse_section(ticker_dict, body):
-   """ Parses the body of each comment/reply """
+def find_tickers(ticker_dict, text):
+   """ Parses the text of each comment/reply """
    blacklist_words = [
       "YOLO", "TOS", "CEO", "CFO", "CTO", "DD", "BTFD", "WSB", "OK", "RH",
       "KYS", "FD", "TYS", "US", "USA", "IT", "ATH", "RIP", "BMW", "GDP",
@@ -65,59 +64,41 @@ def parse_section(ticker_dict, body):
       "GG", "ELON"
    ]
 
-   if '$' in body:
-      index = body.find('$') + 1
-      word = extract_ticker(body, index)
+   def check_and_add_ticker(ticker):
+       data = ticker_data(word)
+       if len(data.Close) > 0:
+           price = data.Close[-1]
+           if word in ticker_dict:
+               ticker_dict[word].count += 1
+               ticker_dict[word].bodies.append(text)
+           else:
+               ticker_dict[word] = Ticker(word)
+               ticker_dict[word].count = 1
+               ticker_dict[word].bodies.append(text)
+
+   # $TICKER format
+   if '$' in text:
+      index = text.find('$') + 1
+      word = extract_ticker(text, index)
       
       if word and word not in blacklist_words:
          try:
-            # special case for $ROPE
-            if word != "ROPE":
-               data = ticker_data(word)
-               if len(data.Close) > 0:
-                  price = data.Close[-1]
-                  if word in ticker_dict:
-                     ticker_dict[word].count += 1
-                     ticker_dict[word].bodies.append(body)
-                  else:
-                     ticker_dict[word] = Ticker(word)
-                     ticker_dict[word].count = 1
-                     ticker_dict[word].bodies.append(body)
+            check_and_add_ticker(word)
          except Exception as e:
-            print(e)
+            #print(e)
             pass
    
-   # checks for non-$ formatted comments, splits every body into list of words
-   word_list = re.sub("[^\w]", " ",  body).split()
+   # TICKER format
+   word_list = re.sub("[^\w]", " ",  text).split()
    for count, word in enumerate(word_list):
-      #print("found word: %s\n" % (word))
       # initial screening of words to check if they are a ticker
       # and len(word) != 1 # skip 1 letter words
       if word.isupper() and (word.upper() not in blacklist_words) and len(word) <= 5 and word.isalpha():
-         # sends request to IEX API to determine whether the current word is a valid ticker
-         # if it isn't, it'll return an error and therefore continue on to the next word
          try:
-            # special case for $ROPE
-            if word != "ROPE":
-               #print("is ticker = %s?\n" % (word))
-               #print("stock info = %s\n" % (get_name(word)))
-               #price = IEXStock(word).get_price()
-               data = ticker_data(word)
-               price = data.Close[-1]
-               #pprint.pprint(vars(data.Close))
-               #print("price for %s is %s" % (word, price))
+            check_and_add_ticker(word)
          except Exception as e:
             #print(e)
-            continue
-      
-         # add/adjust value of dictionary
-         if word in ticker_dict:
-            ticker_dict[word].count += 1
-            ticker_dict[word].bodies.append(body)
-         else:
-            ticker_dict[word] = Ticker(word)
-            ticker_dict[word].count = 1
-            ticker_dict[word].bodies.append(body)
+            continue 
 
    return ticker_dict
 
@@ -128,88 +109,68 @@ def get_url(key, value, total_count):
          perc_mentions = "<1"
    else:
          perc_mentions = int(value / total_count * 100)
-   # special case for $ROPE
-   if key == "ROPE":
-      return "{0} | [{1} {2} ({3}%)](https://www.homedepot.com/b/Hardware-Chains-Ropes-Rope/N-5yc1vZc2gr)".format(key, value, mention, perc_mentions)
-   else:
-      #return "{0} | [{1} {2} ({3}%)](https://finance.yahoo.com/quote/{0}?p={0})".format(key, value, mention, perc_mentions)
-      return "{0} | [{1} {2} ({3}%)](https://marketchameleon.com/Overview/{0}/OptionChain/?ac=volume)".format(key, value, mention, perc_mentions)
-
-def final_post(subreddit, text):
-   # finding the daily discussino thread to post
-   title = str(get_date()) + " | Today's Top 25 WSB Tickers"
-
-   print("\nPosting...")
-   print(title)
-   subreddit.submit(title, selftext=text)
+   #return "{0} | [{1} {2} ({3}%)](https://finance.yahoo.com/quote/{0}?p={0})".format(key, value, mention, perc_mentions)
+   return "{0} | [{1} {2} ({3}%)](https://marketchameleon.com/Overview/{0}/OptionChain/?ac=volume)".format(key, value, mention, perc_mentions)
 
 def get_date():
    now = datetime.datetime.now()
    return now.strftime("%b %d, %Y")
 
-def setup(sub):
-   if sub == "":
-      sub = "wallstreetbets"
+class RedditSource:
+    def __init__(self, sub = "wallstreetbets"):
+        self.sub = sub
 
-   with open("config.json") as json_data_file:
-      data = json.load(json_data_file)
+    def load(self, ticker_dict):
+        subreddit = self.setup()
+        new_posts = subreddit.new(limit=num_submissions)
 
-   # create a reddit instance
-   reddit = praw.Reddit(client_id=data["login"]["client_id"], client_secret=data["login"]["client_secret"],
-                        username=data["login"]["username"], password=data["login"]["password"],
-                        user_agent=data["login"]["user_agent"])
-   # create an instance of the subreddit
-   subreddit = reddit.subreddit(sub)
-   return subreddit
+        for count, post in enumerate(new_posts):
+            # if we have not already viewed this post thread
+            if not post.clicked:
+                # parse the post's title's text
+               ticker_dict = find_tickers(ticker_dict, post.title)
 
+               # search through all comments and replies to comments
+               comments = post.comments
+               for comment in comments:
+                   # without this, would throw AttributeError since the instance in this represents the "load more comments" option
+                  if isinstance(comment, MoreComments):
+                      continue
+                  ticker_dict = find_tickers(ticker_dict, comment.body)
 
-def run(mode, sub, num_submissions):
+                  # iterate through the comment's replies
+                  replies = comment.replies
+                  for rep in replies:
+                      # without this, would throw AttributeError since the instance in this represents the "load more comments" option
+                     if isinstance(rep, MoreComments):
+                         continue
+                     ticker_dict = find_tickers(ticker_dict, rep.body)
+
+               # update the progress count
+               #print("{0} / {1} {2}".format(count + 1, num_submissions, post.title))
+               #sys.stdout.write("\rProgress: {0} / {1} posts: {2}".format(count + 1, num_submissions, post.title))
+               #sys.stdout.flush()
+
+    def setup(self):
+        with open("config.json") as json_data_file:
+           data = json.load(json_data_file)
+     
+        # create a reddit instance
+        reddit = praw.Reddit(client_id=data["login"]["client_id"], client_secret=data["login"]["client_secret"],
+                             username=data["login"]["username"], password=data["login"]["password"],
+                             user_agent=data["login"]["user_agent"])
+        # create an instance of the subreddit
+        subreddit = reddit.subreddit(self.sub)
+        return subreddit
+
+def run(mode, num_submissions):
    ticker_dict = {}
    text = ""
    total_count = 0
-   within24_hrs = False
 
-   subreddit = setup(sub)
-   new_posts = subreddit.new(limit=num_submissions)
-
-   for count, post in enumerate(new_posts):
-      #print("posts: count=%s, post.title=%s\n" % (count, post.title))
-      # pprint.pprint(vars(post))
-      # if we have not already viewed this post thread
-      if not post.clicked:
-         # parse the post's title's text
-         ticker_dict = parse_section(ticker_dict, post.title)
-
-         # to determine whether it has gone through all posts in the past 24 hours
-         # TODO: implement this as a flag
-         #if "Daily Discussion Thread " in post.title:
-         #   if not within24_hrs:
-         #      within24_hrs = True
-         #   else:
-         #      print("\nTotal posts searched: " + str(count) + "\nTotal ticker mentions: " + str(total_count))
-         #      break
-         
-         # search through all comments and replies to comments
-         comments = post.comments
-         for comment in comments:
-            # without this, would throw AttributeError since the instance in this represents the "load more comments" option
-            if isinstance(comment, MoreComments):
-               continue
-            ticker_dict = parse_section(ticker_dict, comment.body)
-
-            # iterate through the comment's replies
-            replies = comment.replies
-            for rep in replies:
-               # without this, would throw AttributeError since the instance in this represents the "load more comments" option
-               if isinstance(rep, MoreComments):
-                  continue
-               ticker_dict = parse_section(ticker_dict, rep.body)
-         
-         # update the progress count
-         # print("{0} / {1} {2}".format(count + 1, num_submissions, post.title))
-         sys.stdout.write("\rProgress: {0} / {1} posts: {2}".format(count + 1, num_submissions, post.title))
-         sys.stdout.flush()
-
+   r = RedditSource()
+   r.load(ticker_dict)
+   
    text += "\n\nTicker | Mentions | Bullish (%) | Neutral (%) | Bearish (%)\n"
 
    print("Tickers found: %s" % (ticker_dict.keys()))
@@ -234,13 +195,7 @@ def run(mode, sub, num_submissions):
       # setting up formatting for table
       text += "\n{} | {} | {} | {}".format(url, ticker.bullish, ticker.bearish, ticker.neutral)
 
-   # post to the subreddit if it is in bot mode (i.e. not testing)
-   if not mode:
-      final_post(subreddit, text)
-   # testing
-   else:
-      print("\nNot posting to reddit because you're in test mode\n\n*************************************************\n")
-      print(text)
+   print(text)
 
 class Ticker:
    def __init__(self, ticker):
@@ -271,13 +226,13 @@ class Ticker:
       self.neutral = int(neutral_count / len(self.bodies) * 100)
 
 if __name__ == "__main__":
-   # USAGE: wsbtickerbot.py [ subreddit ] [ num_submissions ]
+   # USAGE: wsbtickerbot.py [ num_submissions ]
    mode = 0
    num_submissions = 500
-   sub = "wallstreetbets"
 
-   if len(sys.argv) > 2:
+   if len(sys.argv) > 1:
       mode = 1
-      num_submissions = int(sys.argv[2])
+      num_submissions = int(sys.argv[1])
 
-   run(mode, sub, num_submissions)
+   run(mode, num_submissions)
+
