@@ -181,12 +181,13 @@ def run(mode, sub, num_submissions):
          ticker_dict = parse_section(ticker_dict, post.title)
 
          # to determine whether it has gone through all posts in the past 24 hours
-         if "Daily Discussion Thread " in post.title:
-            if not within24_hrs:
-               within24_hrs = True
-            else:
-               print("\nTotal posts searched: " + str(count) + "\nTotal ticker mentions: " + str(total_count))
-               break
+         # TODO: implement this as a flag
+         #if "Daily Discussion Thread " in post.title:
+         #   if not within24_hrs:
+         #      within24_hrs = True
+         #   else:
+         #      print("\nTotal posts searched: " + str(count) + "\nTotal ticker mentions: " + str(total_count))
+         #      break
          
          # search through all comments and replies to comments
          comments = post.comments
