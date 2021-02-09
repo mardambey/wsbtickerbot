@@ -10,7 +10,9 @@ import re
 import sys
 import time
 import yfinance as yf
+import tweepy
 
+from tweepy import OAuthHandler
 from cache_to_disk import cache_to_disk
 from datetime import date
 from functools import cache
@@ -118,11 +120,27 @@ def get_date():
    now = datetime.datetime.now()
    return now.strftime("%b %d, %Y")
 
+class TwitterSource:
+    def __init__(self, ticker):
+        self.ticker = ticker
+
+    def load(self, ticker_dict, max_tweets):
+        with open("config.json") as json_data_file:
+           data = json.load(json_data_file)
+     
+        auth = tweepy.OAuthHandler(data["twitter"]["consumer_key"], data["twitter"]["consumer_secret"])
+        auth.set_access_token(data["twitter"]["access_token"], data["twitter"]["access_token_secret"])
+        user = tweepy.API(auth)
+        tweets = tweepy.Cursor(user.search, q=str(self.ticker), tweet_mode='extended', lang='en').items(max_tweets)
+        for tweet in tweets:
+            tw = tweet.full_text
+            ticker_dict = find_tickers(ticker_dict, tw)
+
 class RedditSource:
     def __init__(self, sub = "wallstreetbets"):
         self.sub = sub
 
-    def load(self, ticker_dict):
+    def load(self, ticker_dict, num_submissions):
         subreddit = self.setup()
         new_posts = subreddit.new(limit=num_submissions)
 
@@ -158,9 +176,9 @@ class RedditSource:
            data = json.load(json_data_file)
      
         # create a reddit instance
-        reddit = praw.Reddit(client_id=data["login"]["client_id"], client_secret=data["login"]["client_secret"],
-                             username=data["login"]["username"], password=data["login"]["password"],
-                             user_agent=data["login"]["user_agent"])
+        reddit = praw.Reddit(client_id=data["reddit"]["client_id"], client_secret=data["reddit"]["client_secret"],
+                             username=data["reddit"]["username"], password=data["reddit"]["password"],
+                             user_agent=data["reddit"]["user_agent"])
         # create an instance of the subreddit
         subreddit = reddit.subreddit(self.sub)
         return subreddit
@@ -170,9 +188,15 @@ def run(mode, num_submissions):
    text = ""
    total_count = 0
 
+   # find tickers on Reddit and analyze their posts
    r = RedditSource()
-   r.load(ticker_dict)
-   
+   r.load(ticker_dict, num_submissions)
+
+   # analyze those same tickers on Twitter, but add a $ infront to improve the search results
+   for key in list(ticker_dict):
+      t = TwitterSource("$%s" % (key))
+      t.load(ticker_dict, num_submissions)
+
    text += "\n\nTicker | Mentions | Bullish (%) | Neutral (%) | Bearish (%)\n"
 
    print("Tickers found: %s" % (ticker_dict.keys()))
